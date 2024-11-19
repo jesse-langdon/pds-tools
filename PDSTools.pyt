@@ -13,6 +13,7 @@
 import os
 import csv
 import arcpy
+from arcpy import metadata as md
 
 
 # Declare Python Toolbox class
@@ -23,7 +24,7 @@ class Toolbox(object):
         self.alias = ""
 
         # List of tool classes associated with this toolbox
-        self.tools = [APRXInventoryTool, GDBInventoryTool, GetDomainsTool, CleanGeodatabaseTool]
+        self.tools = [APRXInventoryTool, GDBInventoryTool, GetDomainsTool, CleanGeodatabaseTool, SyncMetadataTool]
 
 
 class APRXInventoryTool(object):
@@ -244,6 +245,92 @@ class GetDomainsTool(object):
         """This method takes place after outputs are processed and
         added to the display."""
         return
+
+
+class SyncMetadataTool(object):
+    def __init__(self):
+        """Define the tool."""
+        self.label = "Synchronize Metadata"
+        self.description = "Synchronizes metadata from a source geodatabase to a destination geodatabase."
+        self.canRunInBackground = False
+
+    def getParameterInfo(self):
+        """Define parameter definitions."""
+
+        # Source geodatabase parameter
+        param0 = arcpy.Parameter(
+            displayName="Source Enterprise Geodatabase",
+            name="source_gdb",
+            datatype="DEWorkspace",
+            parameterType="Required",
+            direction="Input"
+        )
+
+        # Destination geodatabase parameter
+        param1 = arcpy.Parameter(
+            displayName="Destination Enterprise Geodatabase",
+            name="destination_gdb",
+            datatype="DEWorkspace",
+            parameterType="Required",
+            direction="Input"
+        )
+        params = [param0, param1]
+
+        return params
+
+    def execute(self, parameters, messages):
+        """The source code of the tool."""
+        source_gdb = parameters[0].valueAsText
+        destination_gdb = parameters[1].valueAsText
+
+        self.sync_metadata(source_gdb, destination_gdb, messages)
+        return
+
+    @staticmethod
+    def sync_metadata(source_gdb, destination_gdb, messages):
+        """
+        Synchronizes metadata for feature classes in a source geodatabase with
+        the corresponding feature classes in a destination geodatabase.
+        """
+        try:
+            # Set the workspace to the source geodatabase
+            arcpy.env.workspace = source_gdb
+
+            # List all feature classes in the source geodatabase
+            feature_classes = arcpy.ListFeatureClasses()
+
+            if not feature_classes:
+                messages.addWarning("No feature classes found in the source geodatabase.")
+                return
+
+            for feature_class in feature_classes:
+                source_fc_path = os.path.join(source_gdb, feature_class)
+                destination_fc_path = os.path.join(destination_gdb, feature_class)
+
+                if arcpy.Exists(destination_fc_path):
+                    messages.addMessage(f"Synchronizing metadata for: {feature_class}")
+
+                    # Export metadata from source feature class to a temporary XML file
+                    source_metadata = md.Metadata(source_fc_path)
+                    temp_metadata_file = os.path.join(arcpy.env.scratchFolder, f"{feature_class}_metadata.xml")
+                    source_metadata.exportMetadata(temp_metadata_file)
+
+                    # Import the metadata XML file into the destination feature class
+                    destination_metadata = md.Metadata(destination_fc_path)
+                    destination_metadata.importMetadata(temp_metadata_file, "DEFAULT")
+                    destination_metadata.save()
+                    messages.addMessage(f"Metadata synchronized successfully for: {feature_class}")
+
+                    # Clean up the temporary metadata file
+                    if os.path.exists(temp_metadata_file):
+                        os.remove(temp_metadata_file)
+                else:
+                    messages.addWarning(
+                        f"Feature class {feature_class} does not exist in the destination geodatabase. Skipping.")
+
+            messages.addMessage("Metadata synchronization complete.")
+        except Exception as e:
+            messages.addError(f"An error occurred: {str(e)}")
 
 
 def aprx_inventory(input_workspace, output_csv):
